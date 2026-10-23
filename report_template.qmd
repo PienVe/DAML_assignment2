@@ -1,66 +1,505 @@
-:::{.callout-note}
-## Instruction
+---
+title: "Group Assignment 2, DAML"
+subtitle: "A Text Clustering Analysis using the Internet Movie Database (IMDB)"
+authors: "Pien, Myrte, Karla Hernandez & Mannos"
+date: "11-01-2026"
+format: html
+abstract: "Unsupervised machine-learning techniques, including spherical k-means clustering and hierarchical clustering, are applied to movie reviews from the Internet Movie Database (IMDB) to explore latent sentiment-based groupings. Text preprocessing, TF-IDF representation, and similarity-based clustering are used to identify and interpret distinct review clusters."
+bibliography: references.bib
+---
 
-This is a quarto file. If you open its [source](report_template.qmd) in RStudio, you will get all the features of this interactive notebook-style document. If you want to know more about how to use this file to generate a .html document to hand in, look at [the getting started guide](https://quarto.org/docs/get-started/hello/rstudio.html).
+# Introduction
 
-(Delete this callout box before handing in your assignment.)
-:::
+This project examines movie reviews from the Internet Movie Database (IMDb), using the `movie_review` dataset provided by the R package `text2vec`. The dataset contains review texts and binary sentiment labels, providing an opportunity to explore how reviews can be grouped according to shared vocabulary and sentiment. [@R-text2vec]
+
+Our project compares two unsupervised machine-learning approaches: spherical k-means clustering and hierarchical agglomerative clustering. Spherical k-means is particularly relevant to text analysis because it clusters document vectors using cosine-based comparisons. [@dhillon2001concept] We aim to explore solutions containing between five and ten clusters and interpret them through representative reviews, prominent keywords, and sentiment-related vocabulary. These groupings will be examined to determine whether they reflect differences in sentiment, movie-related themes, or a combination of both.
+
+Although the dataset includes binary sentiment labels, these are excluded from the clustering inputs and retained only for subsequent interpretation and validation. This allows us to assess whether the groupings discovered from the text align with positive, negative, or mixed sentiment patterns without using the existing labels to construct them.
+
+# Data Description and Exploration
+
+## Dataset Overview
+
+The `movie_review` dataset originally contains 5,000 movie reviews and three variables: `id`, `sentiment`, and `review`. [@R-text2vec] - `id`: a unique identifier for each review. - `sentiment`: a binary label, where `0` represents a negative review and `1` represents a positive review. - `review`: the original review text, which is the main input for preprocessing and clustering.
+
+After removing four repeated review texts during the data-quality check, the dataset contains 4,996 unique review texts.
 
 ```{r}
-#| label: R packages
+#| label: set-up
 #| echo: false
 #| warning: false
 #| message: false
 
+# Assuming all necessary packages have been previously installed in the R console.
+# Load all necessary libraries
 library(text2vec)
+library(dplyr)
+library(stringr)
+library(stopwords)
+library(ggplot2)
+library(tidyr)
 library(wordcloud)
-library(magrittr)
-
-# additional packages here
+library(RColorBrewer)
+library(syuzhet)
 ```
 
 ```{r}
-#| label: data loading
-
+#| label: data-loading
+# Load dataset
 data("movie_review")
 
-# your R code to load the data here
+# Preserve the original dataset for checking and comparison.
+movie_review_original <- movie_review
 ```
-
-# Data description
-
-Describe the data and use a visualization to support your story. (approx. one or two paragraphs)
 
 ```{r}
-#| label: eda visualization
+#| label: data-description
 #| warning: false
 
-# your R code to generate the plot here
-
-movie_review %$% wordcloud(review, 
-                           min.freq = 10, 
-                           max.words = 50, 
-                           random.order = FALSE,
-                           colors = brewer.pal(8, "Dark2"))
-
+# Inspect the data
+str(movie_review)
+head(movie_review, 3) # only display first 3 rows
+dim(movie_review)
 ```
 
-# Text pre-processing
+## Data Quality Check
 
-Describe text pre-processing steps you have used (approx. one or two paragraphs)
+Before text preprocessing, we checked for missing values, empty reviews, duplicated review texts, and duplicated identifiers. We also examined the sentiment distribution before and after duplicate removal.
 
-# Text representaion
+```{r}
+#| label: data-quality-check
+
+# Missing values in each original column
+colSums(is.na(movie_review))
+
+# Empty or whitespace-only reviews
+sum(str_trim(movie_review$review) == "", na.rm = TRUE)
+
+# Duplicate identifiers
+sum(duplicated(movie_review$id))
+
+# Repeated review texts beyond their first occurrence
+sum(duplicated(movie_review$review))
+
+# Sentiment distribution before duplicate removal
+table(movie_review$sentiment)
+
+# Inspect all records belonging to duplicated-text groups
+movie_review %>%
+  filter(
+    duplicated(review) |
+      duplicated(review, fromLast = TRUE)
+  ) %>%
+  select(id, sentiment, review)
+
+# Retain the first occurrence of each review text
+movie_review <- movie_review %>%
+  distinct(review, .keep_all = TRUE)
+
+# Confirm the resulting dataset
+nrow(movie_review)
+sum(duplicated(movie_review$review))
+table(movie_review$sentiment)
+```
+
+The checks identified no missing values, empty reviews, or duplicated identifiers. However, four review entries repeated text that appeared earlier in the dataset. After inspecting the duplicated-text groups, we retained the first occurrence of each review text, leaving **4,996 unique texts for analysis**.
+
+Before duplicate removal, the dataset contained 2,483 negative and 2,517 positive reviews. The labels are retained in their observed proportions without resampling. They are excluded from the clustering inputs and used only for interpretation and validation.
+
+## Review Length Before Text Preprocessing
+
+We examined original review lengths after duplicate removal but before text cleaning. Word counts were approximated by counting whitespace-separated units.
+
+The statistical plots below were created using `ggplot2`. [@R-ggplot2]
+
+```{r}
+#| label: review-length
+#| fig-cap: "Distribution of original review length after duplicate removal."
+
+movie_review <- movie_review %>%
+  mutate(
+    n_words_raw = str_count(review, "\\S+")
+  )
+
+summary(movie_review$n_words_raw)
+
+ggplot(movie_review, aes(x = n_words_raw)) +
+  geom_histogram(bins = 50, fill = "#4C72B0", color = "white") +
+  labs(
+    title = "Distribution of Review Length Before Preprocessing",
+    x = "Number of words in original review",
+    y = "Number of reviews"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+#| label: word-count-range
+
+c(
+  minimum_words = min(movie_review$n_words_raw, na.rm = TRUE),
+  maximum_words = max(movie_review$n_words_raw, na.rm = TRUE)
+)
+```
+
+The distribution is strongly right-skewed: most reviews are relatively short, while a small number of much longer reviews create a pronounced right tail. Review lengths range from 12 to 2,470 words, showing substantial variation in how extensively users express their opinions. These differences need to be considered when comparing texts during clustering.
+
+### Review Length by Sentiment
+
+```{r}
+#| label: review-length-by-sentiment
+#| fig-cap: "Original review length by sentiment label, after duplicate removal."
+
+movie_review %>%
+  mutate(
+    sentiment_label = factor(
+      sentiment,
+      levels = c(0, 1),
+      labels = c("Negative", "Positive")
+    )
+  ) %>%
+  ggplot(
+    aes(
+      x = sentiment_label,
+      y = n_words_raw,
+      fill = sentiment_label
+    )
+  ) +
+  geom_boxplot(show.legend = FALSE) +
+  labs(
+    title = "Review Length by Sentiment Label",
+    x = "Sentiment",
+    y = "Number of words"
+  ) +
+  theme_minimal()
+```
+
+By interpreting the previous boxplot, we can see that positive and negative reviews have similar median lengths and substantial overlap in their middle 50%, suggesting that review length alone does not clearly distinguish sentiment. Both groups contain unusually long reviews, with the most extreme examples appearing in the positive group.
+
+The dots represent length-based outliers beyond the boxplot whiskers—not missing values or the duplicates previously removed. These reviews warrant inspection for detailed commentary or repeated passages, but unusual length alone is not a reason to remove them.
+
+# Text Pre-processing
+
+## Cleaning and Tokenization
+
+The preprocessing pipeline standardizes the review texts while retaining potentially useful sentiment-related vocabulary. HTML tags, URLs, numbers, and most punctuation are removed, while apostrophes are retained. Text is converted to lowercase, extra whitespace is collapsed, and reviews are split into individual tokens.
+
+English stopwords are removed using the `stopwords` package, with `not`, `no`, `nor`, `never`, `very`, and `really` explicitly excluded from the removal list. [@R-stopwords] Stemming is not applied, so complete word forms remain available for readable keyword summaries and cluster interpretation.
+
+```{r}
+#| label: sentiment-preprocessing
+
+my_stopwords <- stopwords::stopwords("en")
+
+my_stopwords <- setdiff(
+  my_stopwords,
+  c("not", "no", "nor", "never", "very", "really")
+)
+
+movie_review <- movie_review %>%
+  mutate(
+    clean_review = str_replace_all(
+      review,
+      "<[^>]+>",
+      " "
+    ),
+
+    clean_review = str_to_lower(clean_review),
+
+    clean_review = str_replace_all(
+      clean_review,
+      "http\\S+|www\\S+",
+      " "
+    ),
+
+    clean_review = str_replace_all(
+      clean_review,
+      "[^a-z'\\s]",
+      " "
+    ),
+
+    clean_review = str_squish(clean_review),
+
+    tokens = str_split(clean_review, "\\s+"),
+
+    tokens_clean = lapply(tokens, function(x) {
+      x[
+        nzchar(x) &
+          str_detect(x, "[a-z]") &
+          !x %in% my_stopwords
+      ]
+    }),
+
+    processed_review = vapply(
+      tokens_clean,
+      paste,
+      collapse = " ",
+      FUN.VALUE = character(1)
+    ),
+
+    n_tokens_clean = lengths(tokens_clean)
+  )
+```
+
+Retaining negations preserves potentially useful information, but does not automatically capture expressions such as “not good.” Word-based representations and dictionary-based emotion scores remain limited in their treatment of negation, sarcasm, and context.
+
+## Preprocessing Quality Checks
+
+```{r}
+#| label: preprocessing-check
+
+# Number of reviews with no remaining tokens
+sum(movie_review$n_tokens_clean == 0)
+
+# Inspect original and processed versions
+movie_review %>%
+  select(id, review, clean_review, processed_review) %>%
+  slice_head(n = 3)
+
+# Flag reviews requiring attention before vectorization
+movie_review <- movie_review %>%
+  mutate(
+    is_empty_processed = n_tokens_clean == 0
+  )
+```
+
+The original review text remains unchanged for comparison. Any reviews with no remaining tokens are flagged for review before vectorization rather than automatically deleted.
+
+### Review Length After Preprocessing
+
+```{r}
+#| label: fig-token-count-distribution
+#| fig-cap: "Distribution of review length after text preprocessing."
+
+summary(movie_review$n_tokens_clean)
+
+ggplot(movie_review, aes(x = n_tokens_clean)) +
+  geom_histogram(
+    bins = 50,
+    fill = "#4C72B0",
+    color = "white"
+  ) +
+  labs(
+    title = "Distribution of Review Length After Preprocessing",
+    x = "Number of tokens after preprocessing",
+    y = "Number of reviews"
+  ) +
+  theme_minimal()
+```
+
+The token-count distribution remains strongly right-skewed: most reviews contain fewer than 200 tokens, while a smaller number contain several hundred. Substantial differences in review length therefore remain after cleaning and should be considered during subsequent similarity calculations and clustering.
+
+# Word Frequency and Emotion Exploration
+
+## Most Frequent Words
+
+We examined the remaining vocabulary to identify frequent general terms and sentiment-related words.
+
+```{r}
+#| label: fig-word-frequency
+#| fig-cap: "Twenty most frequent words after preprocessing."
+
+top_words <- movie_review %>%
+  select(id, tokens_clean) %>%
+  unnest(tokens_clean) %>%
+  count(tokens_clean, sort = TRUE) %>%
+  rename(word = tokens_clean)
+
+head(top_words, 20)
+
+top_words %>%
+  slice_head(n = 20) %>%
+  ggplot(aes(x = reorder(word, n), y = n)) +
+  geom_col(fill = "#4C72B0") +
+  coord_flip() +
+  labs(
+    title = "20 Most Frequent Words After Preprocessing",
+    x = NULL,
+    y = "Frequency"
+  ) +
+  theme_minimal()
+```
+
+As we can see in the previous figure, the words *movie* and *film* dominate the remaining vocabulary, with approximately 8,500 and 8,000 occurrences, respectively. *Not* ranks third, confirming that negation remains prominent after preprocessing, while *good* is the most frequent clearly evaluative word among the top 20. The chart highlights a mixture of general movie-related vocabulary and sentiment-relevant language; it does not show the rare-word patterns needed to justify removing infrequent terms.
+
+## WordCloud
+
+```{r}
+#| label: fig-wordcloud
+#| fig-cap: "Word cloud of frequent words after preprocessing."
+#| warning: false
+
+set.seed(123)
+
+wordcloud(
+  words = top_words$word,
+  freq = top_words$n,
+  min.freq = 10,
+  max.words = 50,
+  random.order = FALSE,
+  colors = RColorBrewer::brewer.pal(8, "Dark2")
+)
+```
+
+The word cloud shows up to 50 frequent terms that meet the minimum frequency threshold of 10 occurrences. [@R-wordcloud] General cinema-related terms dominate, but evaluative words such as *good*, *bad*, *great*, and *love* also appear. Their coexistence highlights why word frequency alone cannot distinguish sentiment: frequent terms reflect both the subject matter and reviewers’ opinions.
+
+## NRC Emotion Vocabulary
+
+We used the NRC Emotion Lexicon through the `syuzhet` package to explore emotion-associated vocabulary. The lexicon associates words with eight emotions—anger, anticipation, disgust, fear, joy, sadness, surprise, and trust—as well as positive and negative sentiment. [@R-syuzhet; @mohammad2010emotions]
+
+```{r}
+#| label: fig-emotion-exploration
+#| fig-cap: "Average NRC emotion-word counts per review."
+
+emotion_columns <- c(
+  "anger", "anticipation", "disgust", "fear",
+  "joy", "sadness", "surprise", "trust"
+)
+
+emotion_scores <- syuzhet::get_nrc_sentiment(
+  movie_review$processed_review
+)
+
+# Assign columns directly so rerunning does not create duplicate names.
+movie_review[names(emotion_scores)] <- emotion_scores
+
+emotion_summary <- movie_review %>%
+  summarise(
+    across(
+      all_of(emotion_columns),
+      mean
+    )
+  ) %>%
+  pivot_longer(
+    everything(),
+    names_to = "emotion",
+    values_to = "mean_count"
+  )
+
+emotion_summary
+
+ggplot(
+  emotion_summary,
+  aes(x = reorder(emotion, mean_count), y = mean_count)
+) +
+  geom_col(fill = "#4C72B0") +
+  coord_flip() +
+  labs(
+    title = "Average NRC Emotion Counts per Review",
+    x = "Emotion",
+    y = "Average number of emotion-associated words"
+  ) +
+  theme_minimal()
+```
+
+*Trust* has the highest average count of associated words, followed by *anticipation* and *joy*, while *surprise* and *disgust* have the lowest. Fear-related vocabulary is almost as frequent as joy-related vocabulary, highlighting the range of emotional language in the reviews.
+
+These counts describe word associations rather than reviewers’ overall feelings. Words may describe a film’s plot or characters rather than the reviewer’s attitude, and a word may belong to more than one emotion category. The scores are therefore used as exploratory vocabulary indicators, not definitive emotion labels. [@R-syuzhet; @mohammad2010emotions]
+
+## Correlations Between Emotion-Word Rates
+
+To reduce the influence of differences in review length, we calculated emotion-word rates per 100 cleaned tokens before examining their correlations.
+
+```{r}
+#| label: fig-emotion-correlations
+#| fig-cap: "Pearson correlations between NRC emotion-word rates per 100 cleaned tokens."
+
+movie_review <- movie_review %>%
+  mutate(
+    across(
+      all_of(emotion_columns),
+      ~ .x / na_if(n_tokens_clean, 0) * 100,
+      .names = "{.col}_per_100"
+    )
+  )
+
+emotion_rate_columns <- paste0(
+  emotion_columns,
+  "_per_100"
+)
+
+emotion_correlations <- movie_review %>%
+  select(all_of(emotion_rate_columns)) %>%
+  cor(use = "complete.obs")
+
+round(emotion_correlations, 2)
+
+correlation_plot_data <- as.data.frame(
+  as.table(emotion_correlations)
+) %>%
+  mutate(
+    Var1 = str_remove(as.character(Var1), "_per_100$"),
+    Var2 = str_remove(as.character(Var2), "_per_100$")
+  )
+
+ggplot(
+  correlation_plot_data,
+  aes(x = Var1, y = Var2, fill = Freq)
+) +
+  geom_tile() +
+  scale_fill_gradient2(
+    low = "#2166AC",
+    mid = "white",
+    high = "#B2182B",
+    midpoint = 0,
+    limits = c(-1, 1)
+  ) +
+  labs(
+    title = "Correlations Between NRC Emotion-Word Rates",
+    x = NULL,
+    y = NULL,
+    fill = "Correlation"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1
+    )
+  )
+```
+
+*Anger*, *disgust*, *fear*, and *sadness* are positively associated, while *joy* is positively associated with *trust* and *anticipation.* *Joy* shows only weak negative associations with *anger*, *disgust*, and *fear.* These patterns may support later cluster interpretation, but do not demonstrate that distinct emotion-based clusters exist.
+
+Expressing counts per 100 cleaned tokens reduces the influence of review length, but does not remove all sources of association. In particular, correlations may partly reflect words shared across NRC emotion categories. [@R-syuzhet; @mohammad2010emotions]
+
+# Handoff for the Next Team Members
+
+The previous preprocessing section prepares the text but does not construct the TF-IDF matrix, calculate Jaccard similarity, or run clustering.
+
+- Mannos: use `movie_review$processed_review` to construct the TF-IDF representation.
+- Pien/Myrte: use `movie_review$tokens_clean` as the starting point for ordinary Jaccard similarity, converting each review into a set of unique tokens.
+- Keep `movie_review$id` aligned with matrix rows so cluster assignments can be matched back to the original reviews.
+- Review documents flagged by `movie_review$is_empty_processed` before constructing matrices.
+- Check again for empty document vectors after vocabulary pruning.
+- Use `review` and `processed_review` to inspect representative examples after clustering.
+- Use the NRC emotion columns, their length-normalized versions, and `sentiment` for interpretation—not as inputs to the text-clustering models.
+
+------------------------------------------------------------------------
+
+# Text Representation Method
 
 Briefly describe your text representation method. (approx. one or two paragraphs)
+
+## TF-IDF for clustering (Mannos)
+
+## Jaccard Similarity (Pien / Myrte)
 
 # Text clustering
 
 Briefly describe which models you compare to perform clustering. (approx. two or three paragraphs)
 
-# Evaluation & model comparison
+# Evaluation & Model Comparison
 
 Describe how you compare the methods and why. (approx. two or three paragraphs)
 
+## Spherical K-Means Clustering
+
+Create sentiment clusters
+
+## Hierarchical Agglomerative Clustering
+
+Add a dendogram visualization comparing hierarchies of sentiment clusters.
 
 ```{r}
 #| label: table example
@@ -72,11 +511,19 @@ data.frame(
 )
 ```
 
+## Interval vs. External Validation
+
+Find which validation method suits our project best.
 
 # Team member contributions
 
 Write down what each team member contributed to the project.
 
-- Author One: a, b, c
+- **Karla Hernandez:** Introduced and described the dataset and checked its quality, including missing values, empty reviews, and duplicate texts. Developed the text-preprocessing pipeline, explored review lengths and word frequencies, and analysed NRC emotion-word counts and correlations. Prepared visualizations, interpreted the findings, added references and bibliography settings, while documenting the text layout for teammates responsible for TF-IDF, Jaccard similarity, and clustering algorithms.
 - Author Two: b, c, d
 - Author Three: a, b, d
+
+# Bibliography
+
+::: {#refs}
+:::
