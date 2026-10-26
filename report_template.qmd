@@ -481,7 +481,88 @@ The previous preprocessing section prepares the text but does not construct the 
 
 Briefly describe your text representation method. (approx. one or two paragraphs)
 
-## TF-IDF for clustering (Mannos)
+## TF-IDF for clustering
+
+TF-IDF represents each review as a sparse vector of term weights. The more often a term occures in a doc the higher its weight , but it scales down by the number of reviews that is included in. Words that are 'rare' get the largest weights, while very often used terms such as movie or film contribute little even when they are very frequent. This means that two reviews are similar when they share unique vocabulary than simply both talk about movies.
+
+The representation is built with `text2vec` from `movie_review$processed_review`, split on whitespace so the tokens are identical to `tokens_clean`. The vocabulary is reduced to terms that appear in at least 0.1% of reviews (\~ 5 docs), in order to reduce the high variance of matrix . Reviews that are empty as discovered during preprocessing are excluded before vectorization, and `movie_review$id` is stored as the matrix row names so cluster assignments can be matched back to the original reviews.
+
+```{r}
+#| label: tfidf-data
+
+# empty reviews excluded
+sum(movie_review$is_empty_processed)
+
+
+df_tfidf <- movie_review %>%
+  filter(!is_empty_processed) %>%
+  select(id, sentiment, processed_review)
+
+nrow(df_tfidf)
+```
+
+```{r}
+#| label: tfidf-vocabulary
+
+tokens_split <- strsplit(df_tfidf$processed_review, "\\s+")
+
+it_vocab <- itoken(
+  tokens_split,
+  ids = df_tfidf$id,
+  progressbar = FALSE
+)
+
+vocab <- create_vocabulary(it_vocab)
+
+#keep terms that appear in at least ~5 docs
+vocab_pruned <- prune_vocabulary(
+  vocab,
+  doc_proportion_min = 0.001
+)
+
+c(
+  terms_raw    = nrow(vocab),
+  terms_pruned = nrow(vocab_pruned)
+)
+```
+
+```{r}
+#| label: tfidf-matrix
+
+it_dtm <- itoken(
+  tokens_split,
+  ids = df_tfidf$id,
+  progressbar = FALSE
+)
+
+vectorizer <- vocab_vectorizer(vocab_pruned)
+
+dtm <- create_dtm(it_dtm, vectorizer)
+
+# smoothed idf: log(1 + n_documents / n_documents_containing_term)
+tfidf_model <- TfIdf$new(norm = "none")
+
+dtm_tfidf <- fit_transform(dtm, tfidf_model)
+
+rownames(dtm_tfidf) <- df_tfidf$id
+
+dim(dtm_tfidf)
+```
+
+```{r}
+#| label: tfidf-checks
+
+# doc ids align with matrix rows
+identical(rownames(dtm_tfidf), df_tfidf$id)
+
+#3 reviews where all term was removed by vocabulary triming 
+sum(Matrix::rowSums(dtm_tfidf) == 0)
+
+# sparse matrix: zero entries in the matrix
+1 - Matrix::nnzero(dtm_tfidf) / length(dtm_tfidf)
+```
+
+The checks confirm that document identifiers stay aligned with matrix rows and that no how many reviews lost all their terms to vocabulary trimming . The sparsity value shows that the most of matrix entries are zero, which is expected expected for text data.
 
 ## Jaccard Similarity (Pien / Myrte)
 
