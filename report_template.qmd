@@ -562,6 +562,54 @@ sum(Matrix::rowSums(dtm_tfidf) == 0)
 1 - Matrix::nnzero(dtm_tfidf) / length(dtm_tfidf)
 ```
 
+```{r}
+#| label: fig-tfidf-idf
+#| fig-cap: "idf weight against the share of reviews that contain a term."
+
+vocab_pruned %>%
+  mutate(
+    doc_prop = doc_count / nrow(df_tfidf),
+    idf      = log(1 + nrow(df_tfidf) / doc_count)
+  ) %>%
+  arrange(doc_prop) %>%
+  ggplot(aes(x = doc_prop, y = idf)) +
+  geom_line(colour = "#4C72B0") +
+  labs(x = "Share of reviews containing the term", y = "idf weight") +
+  theme_minimal()
+```
+
+A term that appears in almost every review gets an idf close to zero, a term that just survived pruning gets close to the maximum weight.
+
+```{r}
+#| label: fig-tfidf-word-weights
+#| fig-cap: "idf weight of a few familiar terms."
+
+vocab_pruned %>%
+  filter(term %in% c("movie", "film", "one", "good", "great",
+                     "bad", "love", "awful", "boring", "masterpiece")) %>%
+  mutate(idf = log(1 + nrow(df_tfidf) / doc_count)) %>%
+  ggplot(aes(x = reorder(term, idf), y = idf)) +
+  geom_col(fill = "#4C72B0") +
+  coord_flip() +
+  labs(x = NULL, y = "idf weight") +
+  theme_minimal()
+```
+
+Words that almost every reviewer uses, like *movie* and *film*, get a small weight. Words that only part of the reviewers use, like *awful* or *masterpiece*, get a much larger one, so they count more when two reviews are compared.
+
+```{r}
+#| label: fig-tfidf-row-sizes
+#| fig-cap: "Number of terms with a non-zero weight per review."
+
+data.frame(n_active = Matrix::rowSums(dtm_tfidf != 0)) %>%
+  ggplot(aes(x = n_active)) +
+  geom_histogram(bins = 50, fill = "#4C72B0", colour = "white") +
+  labs(x = "Terms with non-zero weight", y = "Reviews") +
+  theme_minimal()
+```
+
+Each review has non-zero weights for only a small part of the vocabulary, the rest of its row is zero.
+
 The checks confirm that document identifiers stay aligned with matrix rows and that no how many reviews lost all their terms to vocabulary trimming . The sparsity value shows that the most of matrix entries are zero, which is expected expected for text data.
 
 ## Jaccard Similarity (Pien / Myrte)
