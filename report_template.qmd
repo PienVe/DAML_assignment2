@@ -608,7 +608,7 @@ data.frame(n_active = Matrix::rowSums(dtm_tfidf != 0)) %>%
   theme_minimal()
 ```
 
-Each review has non-zero weights for only a small part of the vocabulary (median 73 terms), the rest of its row is zero.
+Each review has non-zero weights for only a small part of the vocabulary, the rest of its row is zero.
 
 The checks confirm that document identifiers stay aligned with matrix rows and that no how many reviews lost all their terms to vocabulary trimming . The sparsity value shows that the most of matrix entries are zero, which is expected expected for text data.
 
